@@ -1,0 +1,322 @@
+---
+title: "Boosting"
+author: "Mike"
+date: "2020/4/27"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Reference
+
+1. [Adaboost --Miguel Patrício](https://rpubs.com/miguelpatricio/adaboost)
+
+
+1. [Gradient Boost Model --SA](https://rpubs.com/sam123/gbm)
+
+
+1. [gbm](https://rpubs.com/omicsdata/gbm)
+
+1. [Model with additive (m3),Model with interactions (m4),GBM,Tree](https://rpubs.com/jcma08/54838)
+
+1. [R筆記 – (16) Ensemble Learning(集成學習)>>XGBoost](https://rpubs.com/skydome20/R-Note16-Ensemble_Learning)
+
+1. [5_kl1_adaboost >> ada](https://rpubs.com/s14783/klasa1_adaboost_param_0001)
+
+
+# Package
+
+```{r echo=TRUE, message=FALSE, warning=FALSE, paged.print=FALSE}
+library(magrittr) # %<>%
+library(dplyr) # data manipulation
+library(ada) # ada
+library(adabag) # boosting
+source('Source_Boosting.R')
+```
+
+---
+
+# Data
+
+## Titanic
+
+Titanic in R seems to be an aggregation data, not raw data.
+
+```{r}
+data('Titanic')
+class(Titanic)
+Titanic
+```
+
+### Rawdata 
+
+```{r}
+Titanic_df = data.frame(Titanic)
+repeating_sequence <- rep(1:nrow(Titanic_df), Titanic_df$Freq)
+Titanic_raw <- Titanic_df[repeating_sequence,]
+Titanic_raw$Freq <- NULL # delete Freq column
+
+nrow(Titanic_df) # Titanic is an aggregation data
+nrow(Titanic_raw) 
+
+DT::datatable(Titanic_raw)
+```
+
+### Summary
+```{r}
+# Check Variabl Type
+Titanic_raw %>% str()
+
+# Check Missing Value
+is.na(Titanic_raw) %>% sum()
+
+# Check Imbalence Data
+table(Titanic_raw$Survived)
+
+# Check Distribution
+summary(Titanic_raw)
+```
+
+
+---
+
+
+
+# Modeling
+
+## Ada 
+
+‘ada’ is used to fit a variety stochastic boosting models for a **binary response** as described in **Additive Logistic Regression**: A Statistical View of Boosting by Friedman, et al. (2000).
+
+### 0. Setting
+
+```{r}
+data = Titanic_raw
+train_proportion = 0.9
+set.seed(20200419)
+
+# Y must be binary response !
+formula = formula(Survived  ~ .)  
+Y_attribute = 'Survived'
+
+```
+
+### 1. Model
+```{r}
+library(ada)
+
+dataPartition = Partition(data, train_proportion)
+
+training = dataPartition$training
+testing = dataPartition$testing
+
+
+
+Boosting.Ada <- ada(formula = formula, 
+                    data = training,
+                    loss= "logistic", # exponential,logistic
+                    type= "discrete", # discrete,real,gentle
+                    iter=100, 
+                    nu=0.1, 
+                    bag.frac=0.5, 
+                    model.coef=TRUE,
+                    bag.shift=FALSE,
+                    max.iter=20,
+                    delta=10^(-10), 
+                    verbose=FALSE,
+                    na.action=na.rpart)
+
+Boosting.Ada
+
+```
+
+
+### 2. Plot
+```{r}
+plot(Boosting.Ada)
+```
+
+
+
+### 3. Predict
+
+
+#### Training
+```{r message=FALSE, warning=FALSE}
+# Apparent Performance
+
+## pred.Ada.train == Boosting.Ada$fit
+## training[,Y_attribute] == Boosting.Ada$actual
+
+pred.Ada.train <- predict(Boosting.Ada, 
+                    newdata=training,
+                    type="class")
+
+perform.Ada.Apparent <- ModelPerformance(pred.Ada.train, training[,Y_attribute])
+
+
+
+## Confusion Matrix
+perform.Ada.Apparent$confusion_matrix
+
+## Accuracy
+perform.Ada.Apparent$ACC
+```
+
+#### Testing
+```{r message=FALSE, warning=FALSE}
+# True Performance
+pred.Ada.test <- predict(Boosting.Ada, 
+                    newdata=testing,
+                    type="class")
+
+perform.Ada.True <- ModelPerformance(pred.Ada.test, testing[,Y_attribute])
+## Confusion Matrix
+perform.Ada.True$confusion_matrix
+## Accuracy
+perform.Ada.True$ACC
+
+
+perform.Ada.True$plot_positive
+perform.Ada.True$plot_negative
+
+```
+
+
+### 4. Conclusion
+
+---
+
+
+
+## Adabag
+
+Fits the AdaBoost.M1 (Freund and Schapire, 1996) and SAMME (Zhu et al., 2009) algorithms using **classification trees** as single classifiers.
+
+### 0. Setting
+
+```{r}
+data = Titanic_raw
+train_proportion = 0.9
+set.seed(20200419)
+
+formula = formula(Survived  ~ .)  
+Y_attribute = 'Survived'
+
+if_bootstrap = TRUE
+mfinal = 20
+
+coeflearn = 'Breiman'
+#> 'Breiman'(by default), alpha=1/2ln((1-err)/err)
+#> 'Freund' alpha=ln((1-err)/err) is used. 
+#> 'Zhu' the SAMME algorithm is implemented with alpha=ln((1-err)/err)+ ln(nclasses-1).
+
+
+Control.Adabag = rpart::rpart.control(
+                      minsplit = 2, # min obs. in node --- too small cause over-fitting
+                      minbucket = 1, # min obs. in leaf--- too small cause over-fitting
+                      cp = 0.01, # complex parameter --- too small cause over-fitting
+                      # xval = 10, # cross validation
+                      maxdepth = 30, # The root node counted as depth 0
+                      maxcompete = 4, 
+                      maxsurrogate = 5, 
+                      usesurrogate = 2, 
+                      surrogatestyle = 0)
+
+```
+
+### 1. Model
+```{r}
+library(adabag)
+
+dataPartition = Partition(data, train_proportion)
+
+training = dataPartition$training
+testing = dataPartition$testing
+
+
+
+Boosting.Adabag <- boosting(formula = formula,
+                         data = training, 
+                         boos = if_bootstrap,
+                         mfinal = mfinal, 
+                         coeflearn = coeflearn, 
+                         control = Control.Adabag)
+
+
+
+
+Boosting.Adabag$terms
+Boosting.Adabag$importance
+
+```
+
+
+### 2. Plot
+
+```{r message=FALSE, warning=FALSE}
+library(rpart.plot)
+last_tree <- length(Boosting.Adabag$trees)
+rpart.plot(Boosting.Adabag$trees[[last_tree]],
+           branch=0, # tree shape
+           type = 1, # node shape
+           cex=0.8, # sign size
+           fallen.leaves=T,
+           main = paste0('Tree in the last iteration')
+           )
+
+```
+
+
+### 3. Predict
+
+
+#### Training
+```{r message=FALSE, warning=FALSE}
+# Apparent Performance
+
+pred.Adabag.train <- predict(Boosting.Adabag, 
+                    newdata=training,
+                    type="class")
+
+perform.Adabag.Apparent <- ModelPerformance(pred.Adabag.train$class,
+                                            training[,Y_attribute])
+
+
+
+## Confusion Matrix
+perform.Adabag.Apparent$confusion_matrix
+
+## Accuracy
+perform.Adabag.Apparent$ACC
+```
+
+#### Testing
+```{r message=FALSE, warning=FALSE}
+# True Performance
+pred.Adabag.test <- predict(Boosting.Adabag, 
+                    newdata=testing,
+                    type="class")
+
+perform.Adabag.True <- ModelPerformance(pred.Adabag.test$class, 
+                                        testing[,Y_attribute])
+## Confusion Matrix
+perform.Adabag.True$confusion_matrix
+## Accuracy
+perform.Adabag.True$ACC
+
+
+perform.Adabag.True$plot_positive
+perform.Adabag.True$plot_negative
+
+```
+
+
+
+
+
+
